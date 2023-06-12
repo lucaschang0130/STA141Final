@@ -1,0 +1,343 @@
+---
+title: "STA141 Final Project"
+name: "Lucas Chang"
+date: "June 12th"
+output: html_document
+---
+
+## Overview
+
+This document contains instructions on the **course project** for STA 141A Spring 2023. This document is made with `R markdown`. The `rmd` file to generate this document is available on the course website. 
+
+# Background
+
+
+In this project, we analyze a subset of data collected by Steinmetz et al. (2019). While this document provides the basic understanding of the experiments, it is highly recommended that one consults the original publication for a more comprehensive understanding in order to improve the quality of the analysis report.
+
+
+In the study conducted by Steinmetz et al. (2019), experiments were performed on a total of 10 mice over 39 sessions. Each session comprised several hundred trials, during which visual stimuli were randomly presented to the mouse on two screens positioned on both sides of it. The stimuli varied in terms of contrast levels, which took values in {0, 0.25, 0.5, 1}, with 0 indicating the absence of a stimulus. The mice were required to make decisions based on the visual stimuli, using a wheel controlled by their forepaws. A reward or penalty (i.e., feedback) was subsequently administered based on the outcome of their decisions. In particular, 
+
+- When left contrast > right contrast, success (1) if turning the wheel to the right and failure (-1) otherwise.  
+- When right contrast > left contrast, success (1) if turning the wheel to the left and failure (-1) otherwise.  
+- When both left and right contrasts are zero, success (1) if holding the wheel still and failure (-1) otherwise. 
+- When left and right contrasts are equal but non-zero, left or right will be randomly chosen (50%) as the correct choice. 
+
+
+The activity of the neurons in the mice's visual cortex was recorded during the trials and made available in the form of spike trains, which are collections of timestamps corresponding to neuron firing. In this project, we focus specifically on the spike trains of neurons from the onset of the stimuli to 0.4 seconds post-onset. In addition, we only use 18 sessions (Sessions 1 to 18) from four mice: Cori, Frossman, Hence, and Lederberg.
+
+
+# Data structure 
+
+---
+
+A total of 18 RDS files are provided that contain the records from 18 sessions. In each RDS file, you can find the name of mouse from `mouse_name` and date of the experiment from `date_exp`. 
+
+
+Section 2: Exploratory Analysis
+```{r echo=TRUE, eval=TRUE}
+
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('c:/Users/lchan/Downloads/STA141Project/session',i,'.rds',sep=''))
+}
+```
+
+```{r echo=TRUE, eval=TRUE}
+library(tidyverse) 
+library(magrittr)   
+library(knitr) 
+library(dplyr) 
+
+n.session=length(session)
+
+# in library tidyverse
+
+meta <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[i,1]=tmp$mouse_name;
+  meta[i,2]=tmp$date_exp;
+  meta[i,3]=length(unique(tmp$brain_area));
+  meta[i,4]=dim(tmp$spks[[1]])[1];
+  meta[i,5]=length(tmp$feedback_type);
+  meta[i,6]=mean(tmp$feedback_type+1)/2;
+}
+kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+i.s=2 # indicator for this session
+
+i.t=1 # indicator for this trial 
+
+spk.trial = session[[i.s]]$spks[[i.t]]
+area=session[[i.s]]$brain_area
+
+# We need to first calculate the number of spikes for each neuron during this trial 
+spk.count=apply(spk.trial,1,sum)
+
+# for(i in 1:dim(spk.trial)[1]){
+#  spk.count[i]=sum(spk.trial[i,])
+# }
+
+# Next we take the average of spikes across neurons that live in the same area 
+
+# You can use tapply() or group_by() in dplyr
+
+# tapply():
+spk.average.tapply=tapply(spk.count, area, mean)
+
+
+# dplyr: 
+# To use dplyr you need to create a data frame
+tmp <- data.frame(
+  area = area,
+  spikes = spk.count
+)
+# Calculate the average by group using dplyr
+spk.average.dplyr =tmp %>%
+  group_by(area) %>%
+  summarize(mean= mean(spikes))
+
+# Wrapping up the function:
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+# Test the function
+average_spike_area(1,this_session = session[[i.s]])
+
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary <- as_tibble(trial.summary)
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary[[i]],x=trial.summary$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary$id, trial.summary[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+
+```
+
+
+Section 3: Data Integration
+```{r echo=TRUE, eval=TRUE}
+library(caret)
+library(e1071)
+
+#Determine the maximum number of trials across all sessions
+max_trials <- max(sapply(session, function(x) length(x$spks)))
+
+#Initialize an empty matrix to store the average spike matrix
+average_spike_matrix <- matrix(0, nrow = max_trials, ncol = 40)
+
+#Initialize a counter to keep track of the number of trials in each session
+session_trial_counter <- rep(0, length(session))
+
+#Iterate through each session
+for (i in 1:length(session)) {
+  num_trials <- length(session[[i]]$spks)
+
+#Iterate through each trial in the session
+  for (j in 1:num_trials) {
+    spike_matrix <- session[[i]]$spks[[j]]
+
+#Check if the spike matrix has more rows than the maximum number of trials
+    if (dim(spike_matrix)[1] > max_trials) {
+      spike_matrix <- spike_matrix[1:max_trials, ]
+    }
+
+#Pad the spike matrix with zeros to match the maximum number of trials
+    padded_spike_matrix <- rbind(spike_matrix, matrix(0, nrow = max_trials - dim(spike_matrix)[1], ncol = 40))
+
+#Add the spike counts to the average spike matrix
+    average_spike_matrix <- average_spike_matrix + padded_spike_matrix
+
+#Increment the trial counter for the session
+    session_trial_counter[i] <- session_trial_counter[i] + 1
+  }
+}
+
+#Calculate the average spike matrix for each session
+session_average_spike_matrix <- average_spike_matrix / session_trial_counter
+
+#Convert session_average_spike_matrix to a dataframe
+session_average_spike_matrix_df <- as.data.frame(session_average_spike_matrix)
+
+
+#Perform PCA
+pca_result <- prcomp(session_average_spike_matrix, scale = TRUE)
+
+#Get the principal components
+principal_components <- pca_result$x
+
+#Get the proportion of variance explained by each component
+variance_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+
+#Scree plot
+plot(1:length(variance_explained), variance_explained, type = "b",
+     xlab = "Principal Component", ylab = "Proportion of Variance Explained", main = "Scree Plot")
+
+#Determine the number of components to retain
+num_components <-4  # Adjust this based on the scree plot or explained variance threshold
+
+#Select the desired number of components
+selected_components <- principal_components[, 1:num_components]
+
+labels <- numeric()
+#Create an empty vector to store the labels
+
+#Loop through each session
+for (session_num in 1:18) {
+  # Extract the feedback types from the current session
+  session_labels <- session[[session_num]]$feedback_type
+
+#Append the feedback types to the labels vector
+  labels <- c(labels, session_labels)
+}
+
+#Truncate the labels vector to match the length of selected_components
+labels <- labels[1:nrow(selected_components)]
+
+#Convert the labels to a factor if they are not already
+labels <- as.factor(labels)
+
+#Split the data into training and test sets
+set.seed(42)  # Set seed for reproducibility
+train_indices <- createDataPartition(labels, p = 0.8, list = FALSE)
+train_data <- selected_components[train_indices, ]
+train_labels <- labels[train_indices]
+test_data <- selected_components[-train_indices, ]
+test_labels <- labels[-train_indices]
+
+#Train an SVM classifier
+model4 <- svm(train_data, train_labels)
+
+#Make predictions on the test data
+predictions4 <- predict(model4, test_data)
+
+print("SVM Classifier")
+
+#Calculate the accuracy of the classifier
+accuracy4 <- sum(predictions4 == test_labels) / length(test_labels)
+print(paste("Accuracy:", accuracy4))
+```
+Section 4: Predictive Modeling
+```{r echo=TRUE, eval=TRUE}
+
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('c:/Users/lchan/Downloads/STA141Project/session',i,'.rds',sep=''))
+}
+```
+
+
+
+Five variables are available for each trial, namely 
+
+- `feedback_type`: type of the feedback, 1 for success and -1 for failure
+- `contrast_left`: contrast of the left stimulus
+- `contrast_right`: contrast of the right stimulus
+- `time`: centers of the time bins for `spks`  
+- `spks`: numbers of spikes of neurons in the visual cortex in time bins defined in `time`
+- `brain_area`: area of the brain where each neuron lives
+
+Take the 11th trial in Session 5 for example, we can see that the left contrast for this trial is `r 
+session[[5]]$contrast_left[11]`  the right contrast is `r 
+session[[5]]$contrast_right[11]`, and the feedback (i.e., outcome) of the trial is `r session[[5]]$feedback_type[11]`. There are a total of `r length(session[[5]]$brain_area)` meurons in this trial from `r length(unique(session[[5]]$brain_area))` areas of the brain. The spike trains of these neurons are stored in `session[[5]]$spks[[11]]` which is a `r dim(session[[5]]$spks[[11]])[1]` by `r dim(session[[5]]$spks[[11]])[2]` matrix with each entry being the number of spikes of one neuron (i.e., row) in each time bin (i.e., column).
+
+
+# Question of interest
+
+
+The primary objective of this project is to build a predictive model to predict the outcome (i.e., feedback type) of each trial using the neural activity data (i.e., spike trains in `spks`), along with the stimuli (the left and right contrasts). Given the complexity of the data (and that this is a course project), we break the predictive modeling into three parts as follows. 
+
+Part 1 (15 points). Exploratory data analysis. In this part, we will explore the features of the data sets in order to build our prediction model. In particular, we would like to (i) describe the data structures across sessions (e.g., number of neurons, number of trials, stimuli conditions, feedback types), (ii) explore the neural activities during each trial, (iii) explore the changes across trials, and (iv) explore homogeneity and heterogeneity across sessions and mice. 
+
+Part 2 (15 points). Data integration. Using the findings in Part 1, we will propose an approach to combine data across trials by (i) extracting the shared patters across sessions and/or (ii) addressing the differences between sessions. The goal of this part is to enable the borrowing of information across sessions to enhance the prediction performance in Part 3. 
+
+Part 3 (15 points). Model training and prediction. Finally, we will build a prediction model to predict the outcome (i.e., feedback types). The performance will be evaluated on two test sets of 100 trials randomly selected from Session 1 and Session 18, respectively. The test sets will be released on the day of submission when you need to evaluate the performance of your model. 
+
+# Project report outline 
+
+The final submission of the course project is a report in HTML format, along with a link to the Github repository that can be used to reproduce your report. The project report must be legible and the exposition of the report is part of the grading rubrics. For consistency in grading, please follow the outline listed below. 
+
+- Title.
+
+- Abstract.
+
+- Section 1 Introduction. Introduce the objective and briefly review the background of this data set. 
+
+- Section 2 Exploratory analysis. 
+
+
+- Section 3 Data integration. 
+
+- Section 4 Predictive modeling. 
+
+- Section 5 Prediction performance on the test sets. 
+
+- Section 5 Discussion. 
+
+# Project milestones
+
+A series of milestones are set throughout the quarter in order to encourage, and reward, early starts on the course project. Furthermore, there are several project consulting sessions throughout the quarter for students to utilize. 
+
+
+
+
+
+- Project proposal April 21st (optional): 0 points. Students are **strongly recommended** to attend the project consulting session on April 21st during the regular lecture time on Zoom. 
+- Milestone I May 5th (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part I visualization. Students are **recommended** to attend the optional project consulting on May 5th during the regular lecture time on Zoom. 
+- Milestone II May 26 (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part II data integration. Students are **recommended** to attend the optional project consulting on May 26th during the regular lecture time on Zoom. 
+- June 12th Project report: 45 points. Students are **strongly recommended** to attend at least one project consulting session in Week 10. 
+
+
+**Remark**: One important thing to note is that a course project is not an exam where questions on the exam are kept confidential. Instead, the instructor and TAs are more than happy to share with you our thoughts on how to improve your projects before you submit them. From a practical perspective, it is more rewarding to solicit advice and suggestions before we grade your reports than to wait for feedback afterwards. That said, we understand that you may have other courses and obligations that are more important than this course. Therefore, all submissions and attendance are optional except for the final project report due on June 12th.
+
+# Reference {-}
+
+
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+
